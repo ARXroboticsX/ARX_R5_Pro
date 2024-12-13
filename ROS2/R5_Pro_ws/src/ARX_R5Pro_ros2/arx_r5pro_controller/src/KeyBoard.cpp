@@ -9,7 +9,7 @@ namespace arx::r5
 {
     KeyBoardNode::KeyBoardNode() : Node("keyboad_node")
     {
-        joint_cmd_publisher_ = this->create_publisher<arx_r5pro_msg::msg::RobotCmd>("r5pro_cmd", 1);
+        joint_cmd_publisher_ = this->create_publisher<arx5_arm_msg::msg::RobotCmd>("armcmd", 1);
 
         timer_ = this->create_wall_timer(std::chrono::milliseconds(1), std::bind(&KeyBoardNode::Update, this));
     }

@@ -2,26 +2,33 @@
 
 #include <ros/ros.h>
 #include "arx_r5pro_src/interfaces/InterfacesThread.hpp"
-#include "arx_r5pro_msg/RobotCmd.h"
-#include "arx_r5pro_msg/RobotStatus.h"
+#include "arx5_arm_msg/RobotCmd.h"
+#include "arx5_arm_msg/RobotStatus.h"
+#include "arm_control/PosCmd.h"
 #include <chrono>
 #include <memory>
 
-namespace arx
+namespace arx::r5
 {
-    class R5proController
+    class R5ProController
     {
     public:
-        R5proController(ros::NodeHandle nh);
+        R5ProController(ros::NodeHandle nh);
 
-        void CmdCallback(const arx_r5pro_msg::RobotCmd::ConstPtr& msg);
+        void CmdCallback(const arx5_arm_msg::RobotCmd::ConstPtr& msg);
         void PubState(const ros::TimerEvent&);
 
+        void VrCmdCallback(const arm_control::PosCmd::ConstPtr& msg);
+        void VrPubState(const ros::TimerEvent&);
+
+        void FollowCmdCallback(const arx5_arm_msg::RobotStatus::ConstPtr& msg);
+
     private:
-        std::shared_ptr<r5::InterfacesThread> interfaces_thread_ptr_;
+        std::shared_ptr<InterfacesThread> interfaces_ptr_;
 
         ros::Publisher joint_state_publisher_;
         ros::Subscriber joint_state_subscriber_;
+
         ros::Timer timer_;
     };
 }

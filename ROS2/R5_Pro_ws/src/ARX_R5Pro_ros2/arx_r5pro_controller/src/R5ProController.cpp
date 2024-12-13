@@ -6,20 +6,53 @@ namespace arx::r5
 {
     R5ProController::R5ProController() : Node("l5_pro_controller_node")
     {
+        RCLCPP_INFO(this->get_logger(), "机械臂开始初始化...");
+        std::string arm_control_type = this->declare_parameter("arm_control_type", "normal");
+        interfaces_ptr_ = std::make_shared<InterfacesThread>(this->declare_parameter("arm_can_id", "can0"), this->declare_parameter("arm_end_type", 0));
+        // RCLCPP_INFO(this->get_logger(), "arm_control_type = %s",arm_control_type.c_str());
 
-        // 创建发布器
-        joint_state_publisher_ = this->create_publisher<arx_r5pro_msg::msg::RobotStatus>("r5pro_status", 1);
-        // 创建订阅器
-        joint_state_subscriber_ = this->create_subscription<arx_r5pro_msg::msg::RobotCmd>(
-            "r5pro_cmd", 10, std::bind(&R5ProController::CmdCallback, this, std::placeholders::_1));
-        // 定时器，用于发布关节信息
-
-        timer_ = this->create_wall_timer(std::chrono::milliseconds(1), std::bind(&R5ProController::PubState, this));
-
-        interfaces_ptr_ = std::make_shared<InterfacesThread>("can0",0);
+        if (arm_control_type == "normal")
+        {
+            RCLCPP_INFO(this->get_logger(), "常规模式启动");
+            // 创建发布器
+            joint_state_publisher_ = this->create_publisher<arx5_arm_msg::msg::RobotStatus>(this->declare_parameter("arm_pub_topic_name", "arm_status"), 1);
+            // 创建订阅器
+            joint_state_subscriber_ = this->create_subscription<arx5_arm_msg::msg::RobotCmd>(
+                this->declare_parameter("arm_sub_topic_name", "arm_cmd"), 10, std::bind(&R5ProController::CmdCallback, this, std::placeholders::_1));
+            // 定时器，用于发布关节信息
+            timer_ = this->create_wall_timer(std::chrono::milliseconds(1), std::bind(&R5ProController::PubState, this));
+        }
+        else if (arm_control_type == "vr_slave")
+        {
+            RCLCPP_INFO(this->get_logger(), "vr遥操作模式启动");
+            // 创建发布器
+            vr_joint_state_publisher_ = this->create_publisher<arm_control::msg::PosCmd>(this->declare_parameter("arm_pub_topic_name", "arm_status"), 10);
+            // 创建订阅器
+            vr_joint_state_subscriber_ = this->create_subscription<arm_control::msg::PosCmd>(
+                this->declare_parameter("arm_sub_topic_name", "ARX_VR_L"), 10, std::bind(&R5ProController::VrCmdCallback, this, std::placeholders::_1));
+            // 定时器，用于发布关节信息
+            timer_ = this->create_wall_timer(std::chrono::milliseconds(1), std::bind(&R5ProController::VrPubState, this));
+        }
+        else if (arm_control_type == "aloha_master")
+        {
+            RCLCPP_INFO(this->get_logger(), "aloha主机模式启动");
+            joint_state_publisher_ = this->create_publisher<arx5_arm_msg::msg::RobotStatus>(this->declare_parameter("arm_pub_topic_name", "arm_status"), 10);
+            interfaces_ptr_->setArmStatus(InterfacesThread::state::G_COMPENSATION);
+            // 定时器，用于发布关节信息
+            timer_ = this->create_wall_timer(std::chrono::milliseconds(1), std::bind(&R5ProController::PubState, this));
+        }
+        else if (arm_control_type == "aloha_slave")
+        {
+            RCLCPP_INFO(this->get_logger(), "aloha从机模式启动");
+            joint_state_publisher_ = this->create_publisher<arx5_arm_msg::msg::RobotStatus>(this->declare_parameter("arm_pub_topic_name", "arm_status"), 10);
+            follow_joint_state_subscriber_ = this->create_subscription<arx5_arm_msg::msg::RobotStatus>(
+                this->declare_parameter("arm_sub_topic_name", "followed_arm_topic"), 10, std::bind(&R5ProController::FollowCmdCallback, this, std::placeholders::_1));
+            // 定时器，用于发布关节信息
+            timer_ = this->create_wall_timer(std::chrono::milliseconds(1), std::bind(&R5ProController::PubState, this));
+        }
     }
 
-    void R5ProController::CmdCallback(const arx_r5pro_msg::msg::RobotCmd::SharedPtr msg)
+    void R5ProController::CmdCallback(const arx5_arm_msg::msg::RobotCmd::SharedPtr msg)
     {
         double end_pos[6] = {msg->end_pos[0], msg->end_pos[1], msg->end_pos[2], msg->end_pos[3], msg->end_pos[4], msg->end_pos[5]};
 
@@ -43,8 +76,7 @@ namespace arx::r5
 
     void R5ProController::PubState()
     {
-
-        auto message = arx_r5pro_msg::msg::RobotStatus();
+        auto message = arx5_arm_msg::msg::RobotStatus();
         message.header.stamp = this->get_clock()->now();
 
         Eigen::Isometry3d transform = interfaces_ptr_->getEndPose();
@@ -84,6 +116,62 @@ namespace arx::r5
         }
         // 发布消息
         joint_state_publisher_->publish(message);
+    }
+    void R5ProController::VrCmdCallback(const arm_control::msg::PosCmd::SharedPtr msg)
+    {
+        double input[6] = {msg->x, msg->y, msg->z, msg->roll, msg->pitch, msg->yaw};
+        Eigen::Isometry3d transform = solve::Xyzrpy2Isometry(input);
+
+        interfaces_ptr_->setEndPose(transform);
+
+        interfaces_ptr_->setArmStatus(InterfacesThread::state::END_CONTROL);
+
+        interfaces_ptr_->setCatch(msg->gripper);
+    }
+
+    void R5ProController::VrPubState()
+    {
+        auto message = arm_control::msg::PosCmd();
+        // message.header.stamp = this->get_clock()->now();
+
+        Eigen::Isometry3d transform = interfaces_ptr_->getEndPose();
+
+        // 提取四元数和位移
+        Eigen::Quaterniond quat(transform.rotation());
+        Eigen::Vector3d translation = transform.translation();
+
+        std::vector<double> xyzrpy = solve::Isometry2Xyzrpy(transform);
+
+        // 填充vector
+
+        message.x = xyzrpy[0];
+        message.y = xyzrpy[1];
+        message.z = xyzrpy[2];
+        message.roll = xyzrpy[3];
+        message.pitch = xyzrpy[4];
+        message.yaw = xyzrpy[5];
+        message.quater_x = quat.x();
+        message.quater_y = quat.y();
+        message.quater_z = quat.z();
+        message.quater_w = quat.w();
+
+        // 发布消息
+        vr_joint_state_publisher_->publish(message);
+    }
+
+    void R5ProController::FollowCmdCallback(const arx5_arm_msg::msg::RobotStatus::SharedPtr msg)
+    {
+        std::vector<double> target_joint_position(6, 0.0);
+
+        for (int i = 0; i < 6; i++)
+        {
+            target_joint_position[i] = msg->joint_pos[i];
+        }
+
+        interfaces_ptr_->setJointPositions(target_joint_position);
+        interfaces_ptr_->setArmStatus(InterfacesThread::state::POSITION_CONTROL);
+
+        interfaces_ptr_->setCatch(msg->joint_pos[6] * 5);
     }
 }
 
