@@ -10,13 +10,21 @@ find_package(arx5_arm_msg REQUIRED)
 
 include_directories(include)
 
-# 添加共享库路径
-link_directories(${CMAKE_CURRENT_SOURCE_DIR}/lib)
+find_library(ARX_SRC_LIB
+    NAMES arx_r5pro_src
+    PATHS ${CMAKE_CURRENT_SOURCE_DIR}/lib/arx_r5pro_src
+    NO_DEFAULT_PATH  # 禁止在其他路径中搜索
+)
+
+# 确保库文件被找到
+if (NOT ARX_SRC_LIB)
+    message(FATAL_ERROR "library not found!")
+endif()
 
 # 添加可执行文件
 add_executable(R5ProController src/R5ProController.cpp)
 target_include_directories(R5ProController PUBLIC lib/arx_hardware_interface/include lib/arx_r5pro_src/include)
-target_link_libraries(R5ProController ${CMAKE_CURRENT_SOURCE_DIR}/lib/arx_r5pro_src/libarx_r5pro_src.so ${CMAKE_CURRENT_SOURCE_DIR}/lib/arx_hardware_interface/libarx_hardware_interface.so)
+target_link_libraries(R5ProController ${ARX_SRC_LIB})
 ament_target_dependencies(R5ProController rclcpp std_msgs arx5_arm_msg arm_control)
 
 add_executable(KeyBoard src/KeyBoard.cpp)
@@ -27,7 +35,7 @@ install(TARGETS
     KeyBoard
   DESTINATION lib/${PROJECT_NAME})
 
-install(FILES lib/arx_r5pro_src/libarx_r5pro_src.so lib/arx_hardware_interface/libarx_hardware_interface.so
+install(FILES ${ARX_SRC_LIB}
   DESTINATION lib/
 )
 

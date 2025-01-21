@@ -4,18 +4,20 @@
 
 namespace arx::r5
 {
-    R5ProController::R5ProController() : Node("l5_pro_controller_node")
+    R5ProController::R5ProController() : Node("r5_pro_controller_node")
     {
         RCLCPP_INFO(this->get_logger(), "机械臂开始初始化...");
         std::string arm_control_type = this->declare_parameter("arm_control_type", "normal");
         interfaces_ptr_ = std::make_shared<InterfacesThread>(this->declare_parameter("arm_can_id", "can0"), this->declare_parameter("arm_end_type", 0));
         // RCLCPP_INFO(this->get_logger(), "arm_control_type = %s",arm_control_type.c_str());
 
+        auto pub_name = this->declare_parameter("arm_pub_topic_name", "arm_status");
+
         if (arm_control_type == "normal")
         {
             RCLCPP_INFO(this->get_logger(), "常规模式启动");
             // 创建发布器
-            joint_state_publisher_ = this->create_publisher<arx5_arm_msg::msg::RobotStatus>(this->declare_parameter("arm_pub_topic_name", "arm_status"), 1);
+            joint_state_publisher_ = this->create_publisher<arx5_arm_msg::msg::RobotStatus>(pub_name, 1);
             // 创建订阅器
             joint_state_subscriber_ = this->create_subscription<arx5_arm_msg::msg::RobotCmd>(
                 this->declare_parameter("arm_sub_topic_name", "arm_cmd"), 10, std::bind(&R5ProController::CmdCallback, this, std::placeholders::_1));
@@ -26,25 +28,27 @@ namespace arx::r5
         {
             RCLCPP_INFO(this->get_logger(), "vr遥操作模式启动");
             // 创建发布器
-            vr_joint_state_publisher_ = this->create_publisher<arm_control::msg::PosCmd>(this->declare_parameter("arm_pub_topic_name", "arm_status"), 10);
+            vr_joint_state_publisher_ = this->create_publisher<arm_control::msg::PosCmd>(pub_name, 10);
+
+            joint_state_publisher_ = this->create_publisher<arx5_arm_msg::msg::RobotStatus>(pub_name + "_full", 1);
             // 创建订阅器
             vr_joint_state_subscriber_ = this->create_subscription<arm_control::msg::PosCmd>(
                 this->declare_parameter("arm_sub_topic_name", "ARX_VR_L"), 10, std::bind(&R5ProController::VrCmdCallback, this, std::placeholders::_1));
             // 定时器，用于发布关节信息
             timer_ = this->create_wall_timer(std::chrono::milliseconds(1), std::bind(&R5ProController::VrPubState, this));
         }
-        else if (arm_control_type == "aloha_master")
+        else if (arm_control_type == "remote_master")
         {
-            RCLCPP_INFO(this->get_logger(), "aloha主机模式启动");
-            joint_state_publisher_ = this->create_publisher<arx5_arm_msg::msg::RobotStatus>(this->declare_parameter("arm_pub_topic_name", "arm_status"), 10);
+            RCLCPP_INFO(this->get_logger(), "remote主机模式启动");
+            joint_state_publisher_ = this->create_publisher<arx5_arm_msg::msg::RobotStatus>(pub_name, 10);
             interfaces_ptr_->setArmStatus(InterfacesThread::state::G_COMPENSATION);
             // 定时器，用于发布关节信息
             timer_ = this->create_wall_timer(std::chrono::milliseconds(1), std::bind(&R5ProController::PubState, this));
         }
-        else if (arm_control_type == "aloha_slave")
+        else if (arm_control_type == "remote_slave")
         {
-            RCLCPP_INFO(this->get_logger(), "aloha从机模式启动");
-            joint_state_publisher_ = this->create_publisher<arx5_arm_msg::msg::RobotStatus>(this->declare_parameter("arm_pub_topic_name", "arm_status"), 10);
+            RCLCPP_INFO(this->get_logger(), "remote从机模式启动");
+            joint_state_publisher_ = this->create_publisher<arx5_arm_msg::msg::RobotStatus>(pub_name, 10);
             follow_joint_state_subscriber_ = this->create_subscription<arx5_arm_msg::msg::RobotStatus>(
                 this->declare_parameter("arm_sub_topic_name", "followed_arm_topic"), 10, std::bind(&R5ProController::FollowCmdCallback, this, std::placeholders::_1));
             // 定时器，用于发布关节信息
@@ -131,6 +135,7 @@ namespace arx::r5
 
     void R5ProController::VrPubState()
     {
+        // RCLCPP_INFO(this->get_logger(), "发布数据");
         auto message = arm_control::msg::PosCmd();
         // message.header.stamp = this->get_clock()->now();
 
@@ -155,8 +160,48 @@ namespace arx::r5
         message.quater_z = quat.z();
         message.quater_w = quat.w();
 
+        std::vector<double> joint_pos_vector = interfaces_ptr_->getJointPositons();
+        std::vector<double> joint_velocities_vector = interfaces_ptr_->getJointVelocities();
+        std::vector<double> joint_current_vector = interfaces_ptr_->getJointCurrent();
+
+        message.gripper = joint_pos_vector[6];
+
         // 发布消息
         vr_joint_state_publisher_->publish(message);
+
+        //==========================================================
+        auto msg = arx5_arm_msg::msg::RobotStatus();
+        msg.header.stamp = this->get_clock()->now();
+
+        // 创建长度为6的vector
+        std::array<double, 6> result;
+
+        // 填充vector
+        result[0] = xyzrpy[0];
+        result[1] = xyzrpy[1];
+        result[2] = xyzrpy[2];
+        result[3] = xyzrpy[3];
+        result[4] = xyzrpy[4];
+        result[5] = xyzrpy[5];
+
+        msg.end_pos = result;
+
+        for (int i = 0; i <= 7; i++)
+        {
+            msg.joint_pos[i] = joint_pos_vector[i];
+        }
+
+        for (int i = 0; i <= 7; i++)
+        {
+            msg.joint_vel[i] = joint_velocities_vector[i];
+        }
+
+        for (int i = 0; i < 7; i++)
+        {
+            msg.joint_cur[i] = joint_current_vector[i];
+        }
+        // 发布消息
+        joint_state_publisher_->publish(msg);
     }
 
     void R5ProController::FollowCmdCallback(const arx5_arm_msg::msg::RobotStatus::SharedPtr msg)
